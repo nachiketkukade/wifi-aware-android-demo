@@ -42,6 +42,7 @@ public class WifiAwareController {
     private final List<WifiAwareStateListener> listeners = new CopyOnWriteArrayList<>();
 
     private String currentPassphrase;
+    private String currentProtocol = WifiAwareUdpClient.DiscoverUdpServer.DEFAULT_PROTOCOL;
 
     public interface WifiAwareStateListener {
         void onDiscoveryStarted();
@@ -55,7 +56,8 @@ public class WifiAwareController {
         void onDisconnected();
 
         void onUdpMessageReceived(String message);
-        void onUdpMessageSendFailed(String error);
+        void onMessageSent(String status);
+        void onMessageSendFailed(String error);
     }
 
     private WifiAwareController(Context context) {
@@ -86,6 +88,10 @@ public class WifiAwareController {
         return new ArrayList<>(discoveredPeers);
     }
 
+    public String getCurrentProtocol() {
+        return currentProtocol;
+    }
+
     public void startDiscovery(String passphrase) {
         startDiscovery(passphrase, WifiAwareUdpClient.DiscoverUdpServer.DEFAULT_SERVICE_TYPE,
                 WifiAwareUdpClient.DiscoverUdpServer.DEFAULT_PROTOCOL);
@@ -93,6 +99,7 @@ public class WifiAwareController {
 
     public void startDiscovery(String passphrase, String serviceType, String protocol) {
         this.currentPassphrase = passphrase;
+        this.currentProtocol = protocol;
         discoveredPeers.clear();
         seenPeerHandles.clear();
 
@@ -211,6 +218,37 @@ public class WifiAwareController {
         });
     }
 
+    public void runIperf(WifiAwareUdpClient.UdpConnect.IperfListener listener) {
+        if (udpConnect == null) {
+            listener.onLine("Not connected");
+            listener.onComplete(false);
+            return;
+        }
+        boolean tcp = currentProtocol != null && currentProtocol.equalsIgnoreCase("TCP");
+        udpConnect.runIperf(tcp, listener);
+    }
+
+    public void sendTcpMessage(String message) {
+        if (udpConnect != null) {
+            udpConnect.sendTcpMessage(message, new WifiAwareUdpClient.UdpConnect.UdpCallback() {
+                @Override
+                public void onConnected(Inet6Address peerIpv6, int peerPort) { }
+                @Override
+                public void onMessageReceived(String msg) {
+                    notifyMessageSent(msg);
+                }
+                @Override
+                public void onError(String error) {
+                    notifyMessageSendFailed(error);
+                }
+                @Override
+                public void onDisconnected() { }
+            });
+        } else {
+            notifyMessageSendFailed("Not connected");
+        }
+    }
+
     public void sendUdpMessage(String message) {
         if (udpConnect != null) {
             udpConnect.sendUdpMessage(message, new WifiAwareUdpClient.UdpConnect.UdpCallback() {
@@ -220,13 +258,13 @@ public class WifiAwareController {
                 public void onMessageReceived(String msg) { } // Handled by main receive loop
                 @Override
                 public void onError(String error) {
-                    notifyUdpMessageSendFailed(error);
+                    notifyMessageSendFailed(error);
                 }
                 @Override
                 public void onDisconnected() { }
             });
         } else {
-            notifyUdpMessageSendFailed("Not connected");
+            notifyMessageSendFailed("Not connected");
         }
     }
 
@@ -314,9 +352,15 @@ public class WifiAwareController {
         });
     }
 
-    private void notifyUdpMessageSendFailed(String error) {
+    private void notifyMessageSent(String status) {
         mainHandler.post(() -> {
-            for (WifiAwareStateListener listener : listeners) listener.onUdpMessageSendFailed(error);
+            for (WifiAwareStateListener listener : listeners) listener.onMessageSent(status);
+        });
+    }
+
+    private void notifyMessageSendFailed(String error) {
+        mainHandler.post(() -> {
+            for (WifiAwareStateListener listener : listeners) listener.onMessageSendFailed(error);
         });
     }
 }

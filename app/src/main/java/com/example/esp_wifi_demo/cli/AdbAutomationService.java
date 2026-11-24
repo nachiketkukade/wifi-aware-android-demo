@@ -13,6 +13,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.core.content.ContextCompat;
 
+import com.example.esp_wifi_demo.WifiAwareUdpClient;
 import com.example.esp_wifi_demo.core.WifiAwareController;
 import com.example.esp_wifi_demo.library.nan.NanServiceInfo;
 
@@ -27,6 +28,8 @@ public class AdbAutomationService extends Service {
     public static final String ACTION_DISCONNECT = "com.example.esp_wifi_demo.DISCONNECT";
     public static final String ACTION_QUERY_PEERS = "com.example.esp_wifi_demo.QUERY_PEERS";
     public static final String ACTION_SEND_MESSAGE = "com.example.esp_wifi_demo.SEND_MESSAGE";
+    public static final String ACTION_SEND_TCP = "com.example.esp_wifi_demo.SEND_TCP";
+    public static final String ACTION_RUN_IPERF = "com.example.esp_wifi_demo.RUN_IPERF";
 
     private WifiAwareController controller;
 
@@ -84,6 +87,31 @@ public class AdbAutomationService extends Service {
                         Log.e(TAG, "Missing message extra for SEND_MESSAGE");
                     }
                     break;
+
+                case ACTION_SEND_TCP:
+                    String tcpMessage = intent.getStringExtra("message");
+                    Log.i(TAG, "ADB Command: SEND_TCP. Message=" + tcpMessage);
+                    if (tcpMessage != null && !tcpMessage.isEmpty()) {
+                        controller.sendTcpMessage(tcpMessage);
+                    } else {
+                        Log.e(TAG, "Missing message extra for SEND_TCP");
+                    }
+                    break;
+
+                case ACTION_RUN_IPERF:
+                    Log.i(TAG, "ADB Command: RUN_IPERF");
+                    controller.runIperf(new WifiAwareUdpClient.UdpConnect.IperfListener() {
+                        @Override
+                        public void onLine(String line) {
+                            Log.i(TAG, line);
+                        }
+
+                        @Override
+                        public void onComplete(boolean success) {
+                            Log.i(TAG, "iperf complete success=" + success);
+                        }
+                    });
+                    break;
             }
         }
     };
@@ -100,6 +128,8 @@ public class AdbAutomationService extends Service {
         filter.addAction(ACTION_DISCONNECT);
         filter.addAction(ACTION_QUERY_PEERS);
         filter.addAction(ACTION_SEND_MESSAGE);
+        filter.addAction(ACTION_SEND_TCP);
+        filter.addAction(ACTION_RUN_IPERF);
 
         ContextCompat.registerReceiver(this, adbReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
     }
