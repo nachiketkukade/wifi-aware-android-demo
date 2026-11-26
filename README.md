@@ -1,15 +1,17 @@
-# WiFi Aware NAN Library - UDP Socket Example
+# Wi-Fi Aware Android Demo
 
 ## Overview
 
-This document demonstrates how to use the WiFi Aware NAN library for discovering and communicating with a UDP Socket peer. The library simplifies WiFi Aware development by providing service discovery, NAN Data Path (NDP) establishment, and socket management.
+This demo discovers an Espressif Wi-Fi Aware (NAN) service, establishes the NAN
+datapath, and lets you benchmark or exchange data with the peer. The connected
+screen provides separate UDP, TCP, and iperf actions.
 
 ### Architecture
 
 ```mermaid
 flowchart TB
     subgraph app [Application Layer]
-        App[UDP Application]
+        App[UDP / TCP / iperf Application]
     end
 
     subgraph library [WiFi Aware NAN Library]
@@ -25,135 +27,79 @@ flowchart TB
 
     App -->|capabilities| NanUtilities
     App -->|discovery| NanManager
-    App -->|NDP and UDP sockets| Transport
+    App -->|NDP and sockets| Transport
 
     NanUtilities -.->|queries| AndroidWifiAwareManager
     NanManager -.->|publish/subscribe| AndroidWifiAwareManager
     Transport -.->|NDP| ConnectivityManager
 ```
 
-## Steps to use UDP Socket Example
+## Running the demo
 
-### Step 1: Device Capability Check
+### 1. Prepare the ESP peer
 
-Check if the device supports WiFi Aware and display its capabilities.
+Build and flash the matching example from `esp-wifi-apps`:
 
-```java
-// Check if device supports WiFi Aware
-NanUtilities capabilities = new NanUtilities();
-if (capabilities.refreshCapabilities(wifiAwareSession)) {
-    String info = capabilities.displayCapabilities();
-    // Display to user
-}
-```
+- `udp_server` for UDP message testing
+- `tcp_server` for TCP message testing
+- `iperf_server` for benchmarking
 
-### Step 2: Service Discovery
+For the iperf example, the default service is `ESP-iperf`, the default port is
+`5001`, and the default test duration is 30 seconds. The Android service type
+and protocol must match the ESP configuration.
 
-Discover the UDP service using `NanManager`.
+### 2. Discover and establish the datapath
 
-```java
-NanManager nanManager = new NanManager(wifiAwareSession);
+1. Enter the advertised service type (`ESP-iperf` for iperf).
+2. Select `UDP` or `TCP`.
+3. Enable **Secure Connection** and enter the ESP passphrase when using the
+   passphrase-secured Android preset. Disable it for an open ESP build.
+4. Tap **Discover**, then select the ESP service.
+5. Wait for **Connected**. No application data is sent automatically when the
+   NAN datapath is established.
 
-NanManager.DiscoveryListener listener = new NanManager.DiscoveryListener() {
-    @Override
-    public void onServiceFound(NanServiceInfo service) {
-        // Store discovered UDP service for later connection
-    }
+### 3. Use the connected actions
 
-    @Override
-    public void onDiscoveryStarted(String serviceType) {
-        // Discovery started
-    }
-    // ... implement other methods
-};
+- **Send UDP** sends one text datagram.
+- **Send TCP** opens a TCP socket and sends one text line.
+- **Run iperf** sends traffic for 30 seconds and reports bandwidth every
+  3 seconds. The UDP benchmark is equivalent to:
 
-// Discover UDP service
-nanManager.discoverServices("ESP-Demo._udp", NanManager.PROTOCOL_NAN, listener);
-```
+  ```text
+  iperf -c <peer> -p 5001 -t 30 -i 3 -u
+  ```
 
-### Step 3: Connect and Communicate over UDP
+  For TCP, omit `-u`. The Android app generates the traffic itself; it does
+  not require an `iperf` binary on the phone. The ESP iperf server reports the
+  receive-side measurement.
 
-Establish the NAN Data Path (NDP) and communicate with the discovered peer using UDP.
+## Architecture
 
-```java
-// Connect to a discovered peer
-Transport transport = new Transport(context);
-DiscoveredService service = /* from discovery callback */;
-
-// Send SRV request
-transport.sendSrvRequest(
-    discover.getSession(),
-    service.peerHandle,
-    new TransportCallback() {
-        @Override
-        public void onConnected(Socket socket, Inet6Address peerIpv6) {
-            // Use transport and peerIpv6 for UDP communication
-        }
-
-        @Override
-        public void onError(String error) {
-            // Handle error
-        }
-
-        @Override
-        public void onDisconnected() {
-            // Handle disconnect
-        }
-    }
-);
-```
-
-### Step 4: Cleanup
-
-Ensure that you release resources when the communication is done.
-
-```java
-// Cleanup when done
-transport.release();
-```
-
-## ESP32 Setup
-
-For the ESP32 side, this Android app is designed to work with the examples provided in the official Espressif WiFi apps repository.
-
-1. Clone the repository: `https://github.com/espressif/esp-wifi-apps/`
-2. Flash the `udp_server` example onto your ESP32 device.
-3. Ensure the ESP32 is powered on and advertising its WiFi Aware (NAN) service before attempting to connect from the Android app.
+`NanManager` handles service discovery, `Transport` establishes the secured or
+open NAN datapath, and `WifiAwareUdpClient` owns the UDP/TCP/iperf traffic
+actions. The app uses IPv6 link-local addresses over the NAN network.
 
 ## Command Line Interface (CLI)
 
-The library provides a broadcast receiver (`AdbAutomationService`) that enables automation and testing via Android Debug Bridge (ADB).
+The `AdbAutomationService` receiver supports discovery, connection, TCP, and iperf commands:
 
-### 1. Start Discovery
-Starts scanning for UDP servers.
 ```bash
-adb shell am broadcast -a com.library.nan.START_DISCOVERY \
-    --es service_type "ESP-Demo" \
+adb shell am broadcast -a com.example.esp_wifi_demo.START_DISCOVERY \
+    --es service_type "ESP-iperf" \
     --es protocol "UDP"
-```
 
-### 2. Query Peers
-Lists all discovered peers and their properties in logcat.
-```bash
-adb shell am broadcast -a com.library.nan.QUERY_PEERS
-```
+adb shell am broadcast -a com.example.esp_wifi_demo.QUERY_PEERS
 
-### 3. Connect to Peer
-Connects to a specific discovered instance by name.
-```bash
-adb shell am broadcast -a com.library.nan.CONNECT_PEER \
-    --es instance_name "ESP UDP Server"
-```
+adb shell am broadcast -a com.example.esp_wifi_demo.CONNECT_PEER \
+    --es instance_name "ESP iperf Server"
 
-### 4. Send UDP Message
-Sends a string message to the connected peer over UDP.
-```bash
-adb shell am broadcast -a com.library.nan.SEND_MESSAGE \
+adb shell am broadcast -a com.example.esp_wifi_demo.SEND_MESSAGE \
     --es message "Hello from ADB"
-```
 
-### 5. Disconnect
-Disconnects from the peer and stops any active connection.
-```bash
-adb shell am broadcast -a com.library.nan.DISCONNECT
+adb shell am broadcast -a com.example.esp_wifi_demo.SEND_TCP \
+    --es message "Hello from ADB"
+
+adb shell am broadcast -a com.example.esp_wifi_demo.RUN_IPERF
+
+adb shell am broadcast -a com.example.esp_wifi_demo.DISCONNECT
 ```

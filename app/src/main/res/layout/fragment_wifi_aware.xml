@@ -224,12 +224,32 @@
                 android:textSize="14sp" />
         </ScrollView>
         
-        <Button
-            android:id="@+id/btn_send_udp"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Send UDP Message"
-            android:layout_margin="16dp" />
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <Button
+                android:id="@+id/btn_send_udp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Send UDP" />
+
+            <Button
+                android:id="@+id/btn_send_tcp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Send TCP" />
+
+            <Button
+                android:id="@+id/btn_run_iperf"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Run iperf" />
+        </LinearLayout>
 
     </LinearLayout>
 

@@ -14,12 +14,16 @@ import com.example.esp_wifi_demo.library.nan.NanServiceInfo;
 import com.example.esp_wifi_demo.library.nan.Transport;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Locale;
 
 @RequiresApi(api = Build.VERSION_CODES.Q)
 public class WifiAwareUdpClient {
@@ -264,6 +268,193 @@ public class WifiAwareUdpClient {
                     callback.onError("Send failed: " + e.getMessage());
                 }
             }).start();
+        }
+
+        public void sendTcpMessage(String message, UdpCallback callback) {
+            if (!isRunning || transport.getNanNetwork() == null || transport.getPeerIpv6() == null) {
+                callback.onError("NAN network is not ready");
+                return;
+            }
+
+            new Thread(() -> {
+                Socket socket = null;
+                try {
+                    int port = transport.getPeerPort();
+                    if (port <= 0) {
+                        port = 3333;
+                    }
+                    socket = new Socket();
+                    transport.getNanNetwork().bindSocket(socket);
+                    socket.connect(new InetSocketAddress(transport.getPeerIpv6(), port), 10_000);
+                    java.io.OutputStream out = socket.getOutputStream();
+                    byte[] data = (message + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    out.write(data);
+                    out.flush();
+                    Log.d(TAG, "Sent TCP message: " + message);
+                    callback.onMessageReceived("TCP sent OK");
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to send TCP message", e);
+                    callback.onError("Send failed: " + e.getMessage());
+                } finally {
+                    if (socket != null) {
+                        try {
+                            socket.close();
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+            }).start();
+        }
+
+        public interface IperfListener {
+            void onLine(String line);
+            void onComplete(boolean success);
+        }
+
+        private static final int IPERF_SECONDS = 30;
+        private static final int IPERF_INTERVAL_SECONDS = 3;
+        private static final int IPERF_PORT = 5001;
+        private static final int IPERF_UDP_BYTES = 1450;
+        private volatile boolean iperfRunning = false;
+
+        /**
+         * One iperf client run over the existing NAN datapath.
+         * Equivalent to: iperf -c PEER -p 5001 -t 30 -i 3 [-u]
+         */
+        public boolean runIperf(boolean tcp, IperfListener listener) {
+            if (!isRunning || transport.getNanNetwork() == null || transport.getPeerIpv6() == null) {
+                listener.onLine("NAN network is not ready");
+                listener.onComplete(false);
+                return false;
+            }
+            if (iperfRunning) {
+                listener.onLine("iperf already running");
+                listener.onComplete(false);
+                return false;
+            }
+            iperfRunning = true;
+            new Thread(() -> {
+                boolean success = false;
+                try {
+                    int port = transport.getPeerPort();
+                    if (port <= 0) {
+                        port = IPERF_PORT;
+                    }
+                    Inet6Address peer = transport.getPeerIpv6();
+                    listener.onLine(String.format(Locale.US,
+                            "iperf -c %s -p %d -t %d%s",
+                            peer.getHostAddress(), port, IPERF_SECONDS, tcp ? "" : " -u"));
+                    if (tcp) {
+                        runTcpIperf(peer, port, listener);
+                    } else {
+                        runUdpIperf(peer, port, listener);
+                    }
+                    success = true;
+                } catch (IOException e) {
+                    listener.onLine("iperf failed: " + e.getMessage());
+                } finally {
+                    iperfRunning = false;
+                    listener.onComplete(success);
+                }
+            }, "iperf-client").start();
+            return true;
+        }
+
+        private void runUdpIperf(Inet6Address peer, int port, IperfListener listener) throws IOException {
+            Network network = transport.getNanNetwork();
+            DatagramSocket socket = new DatagramSocket();
+            try {
+                network.bindSocket(socket);
+                socket.setSendBufferSize(256 * 1024);
+                byte[] payload = new byte[IPERF_UDP_BYTES];
+                ByteBuffer id = ByteBuffer.wrap(payload);
+                long start = System.nanoTime();
+                long lastReportNs = start;
+                long nextReport = start + IPERF_INTERVAL_SECONDS * 1_000_000_000L;
+                long end = start + IPERF_SECONDS * 1_000_000_000L;
+                long sent = 0;
+                long intervalBytes = 0;
+                int seq = 0;
+                boolean loggedBufferFull = false;
+                while (System.nanoTime() < end && isRunning) {
+                    id.putInt(0, seq++);
+                    DatagramPacket packet = new DatagramPacket(payload, payload.length, peer, port);
+                    try {
+                        socket.send(packet);
+                        sent += payload.length;
+                        intervalBytes += payload.length;
+                    } catch (IOException e) {
+                        // Expected: send buffer fills during a full-rate blast.
+                        if (!loggedBufferFull) {
+                            Log.d(TAG, "First send buffer full: " + e.getMessage());
+                            loggedBufferFull = true;
+                        }
+                    }
+                    long now = System.nanoTime();
+                    if (now >= nextReport) {
+                        listener.onLine(iperfInterval(start, now, lastReportNs, intervalBytes));
+                        intervalBytes = 0;
+                        lastReportNs = now;
+                        nextReport += IPERF_INTERVAL_SECONDS * 1_000_000_000L;
+                    }
+                }
+                listener.onLine(iperfTotal(start, System.nanoTime(), sent));
+                listener.onLine("iperf finished");
+            } finally {
+                socket.close();
+            }
+        }
+
+        private void runTcpIperf(Inet6Address peer, int port, IperfListener listener) throws IOException {
+            Network network = transport.getNanNetwork();
+            Socket socket = new Socket();
+            network.bindSocket(socket);
+            socket.setTcpNoDelay(true);
+            socket.setSendBufferSize(256 * 1024);
+            socket.connect(new InetSocketAddress(peer, port), 10_000);
+            try {
+                OutputStream out = socket.getOutputStream();
+                byte[] payload = new byte[16 * 1024];
+                long start = System.nanoTime();
+                long lastReportNs = start;
+                long nextReport = start + IPERF_INTERVAL_SECONDS * 1_000_000_000L;
+                long end = start + IPERF_SECONDS * 1_000_000_000L;
+                long sent = 0;
+                long intervalBytes = 0;
+                while (System.nanoTime() < end && isRunning) {
+                    out.write(payload);
+                    sent += payload.length;
+                    intervalBytes += payload.length;
+                    long now = System.nanoTime();
+                    if (now >= nextReport) {
+                        listener.onLine(iperfInterval(start, now, lastReportNs, intervalBytes));
+                        intervalBytes = 0;
+                        lastReportNs = now;
+                        nextReport += IPERF_INTERVAL_SECONDS * 1_000_000_000L;
+                    }
+                }
+                out.flush();
+                listener.onLine(iperfTotal(start, System.nanoTime(), sent));
+                listener.onLine("iperf finished");
+            } finally {
+                socket.close();
+            }
+        }
+
+        private static String iperfInterval(long startNs, long nowNs, long lastReportNs, long bytes) {
+            double endSec = (nowNs - startNs) / 1_000_000_000.0;
+            double actualInterval = Math.max(0.001, (nowNs - lastReportNs) / 1_000_000_000.0);
+            double startSec = Math.max(0, endSec - actualInterval);
+            double mbps = (bytes * 8.0) / (actualInterval * 1_000_000.0);
+            return String.format(Locale.US, "[  1] %4.1f-%4.1f sec  %6.2f MBytes  %6.2f Mbits/sec",
+                    startSec, endSec, bytes / (1024.0 * 1024.0), mbps);
+        }
+
+        private static String iperfTotal(long startNs, long nowNs, long bytes) {
+            double seconds = Math.max(0.001, (nowNs - startNs) / 1_000_000_000.0);
+            double mbps = (bytes * 8.0) / (seconds * 1_000_000.0);
+            return String.format(Locale.US, "[  1] %4.1f-%4.1f sec  %6.2f MBytes  %6.2f Mbits/sec",
+                    0.0, seconds, bytes / (1024.0 * 1024.0), mbps);
         }
 
         public void stopUdpSocket() {

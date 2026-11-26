@@ -2,6 +2,7 @@ package com.example.esp_wifi_demo.ui.wifiaware;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -133,8 +134,33 @@ public class WifiAwareFragment extends Fragment implements WifiAwareController.W
         binding.btnDisconnect.setOnClickListener(v -> showMainContent());
 
         binding.btnSendUdp.setOnClickListener(v -> {
-            appendLog("Sending: Message from Android");
+            appendLog("Sending UDP: Message from Android");
             controller.sendUdpMessage("Message from Android");
+        });
+
+        binding.btnSendTcp.setOnClickListener(v -> {
+            appendLog("Sending TCP: Message from Android");
+            controller.sendTcpMessage("Message from Android");
+        });
+
+        binding.btnRunIperf.setOnClickListener(v -> {
+            binding.btnRunIperf.setEnabled(false);
+            appendLog("Starting iperf client");
+            controller.runIperf(new WifiAwareUdpClient.UdpConnect.IperfListener() {
+                @Override
+                public void onLine(String line) {
+                    runOnUi(() -> appendLog(line));
+                }
+
+                @Override
+                public void onComplete(boolean success) {
+                    runOnUi(() -> {
+                        if (binding != null) {
+                            binding.btnRunIperf.setEnabled(true);
+                        }
+                    });
+                }
+            });
         });
 
         return root;
@@ -158,6 +184,19 @@ public class WifiAwareFragment extends Fragment implements WifiAwareController.W
     public void onDestroyView() {
         super.onDestroyView();
         binding = null;
+    }
+
+    private void runOnUi(Runnable action) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            if (binding == null) {
+                return;
+            }
+            action.run();
+        });
     }
 
     private void appendLog(String log) {
@@ -271,6 +310,9 @@ public class WifiAwareFragment extends Fragment implements WifiAwareController.W
         binding.discoveryPanel.setVisibility(View.GONE);
         binding.espControlPanel.setVisibility(View.VISIBLE);
         binding.udpLogs.setText("Logs:\nConnected to " + instanceName + "\n");
+        String protocol = controller.getCurrentProtocol();
+        boolean tcp = protocol != null && protocol.equalsIgnoreCase("TCP");
+        binding.btnRunIperf.setText(tcp ? "Run iperf (TCP)" : "Run iperf (UDP)");
         Toast.makeText(requireContext(), "Connected!", Toast.LENGTH_SHORT).show();
     }
 
@@ -294,7 +336,12 @@ public class WifiAwareFragment extends Fragment implements WifiAwareController.W
     }
 
     @Override
-    public void onUdpMessageSendFailed(String error) {
+    public void onMessageSent(String status) {
+        appendLog(status);
+    }
+
+    @Override
+    public void onMessageSendFailed(String error) {
         appendLog("Send error: " + error);
     }
 
